@@ -1,0 +1,26 @@
+﻿# Secrets et configurations locales
+.streamlit/secrets.toml
+.streamlit/secrets.local.toml
+.env
+.env.*
+!.env.example
+
+# Environnements Python
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+
+# Caches et outils
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.streamlit/cache/
+
+# Fichiers temporaires et système
+*.log
+*.tmp
+*.temp
+.DS_Store
+Thumbs.db
