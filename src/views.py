@@ -18,6 +18,7 @@ from src.database import (
     get_map_photos,
     get_photos,
     insert_photo,
+    update_photo,
     upload_image,
 )
 from src.geocoding import search_locations
@@ -31,6 +32,16 @@ def _date_as_utc_timestamp(value: date | None) -> str | None:
     if value is None:
         return None
     return datetime.combine(value, time.min, tzinfo=timezone.utc).isoformat()
+
+
+def _date_input_value(value: str | None) -> date | None:
+    """Convertit une date stockée en valeur utilisable par st.date_input."""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).date()
+    except ValueError:
+        return None
 
 
 def get_profile_from_query_params() -> str | None:
@@ -104,11 +115,6 @@ def _change_gallery_index(photo_id: int, image_count: int, step: int) -> None:
     st.session_state[key] = (st.session_state.get(key, 0) + step) % image_count
 
 
-def _rotate_gallery_photo(photo_id: int, image_index: int, degrees: int) -> None:
-    key = f"photo_rotation_{photo_id}_{image_index}"
-    st.session_state[key] = (st.session_state.get(key, 0) + degrees) % 360
-
-
 def _show_photo_dialog(photo: dict[str, Any]) -> None:
     """Ouvre le détail avec le texte avant une galerie de vignettes."""
     title = photo.get("title") or "Sans titre"
@@ -134,21 +140,19 @@ def _show_photo_dialog(photo: dict[str, Any]) -> None:
             st.session_state.setdefault(gallery_key, 0)
             st.session_state[gallery_key] %= len(photo_images)
             current_index = st.session_state[gallery_key]
-            rotation_key = f"photo_rotation_{photo['id']}_{current_index}"
-            st.session_state.setdefault(rotation_key, 0)
-            rotation = st.session_state[rotation_key]
             st.markdown(
                 f"""
                 <style>
                 [role="dialog"] [data-testid="stImage"] img {{
                     display: block;
-                    width: min(100%, 420px);
-                    height: 420px;
+                    width: auto !important;
+                    height: auto !important;
+                    max-width: 100% !important;
+                    max-height: 70vh !important;
                     object-fit: contain;
                     border-radius: 10px;
-                    background: rgba(0, 0, 0, .12);
+                    background: transparent;
                     margin: 0 auto;
-                    transform: rotate({rotation}deg);
                 }}
                 </style>
                 """,
@@ -178,26 +182,8 @@ def _show_photo_dialog(photo: dict[str, Any]) -> None:
                     photo_images[current_index],
                     use_container_width=True,
                 )
-                rotate_left, counter, rotate_right = st.columns([1, 2, 1])
-                with rotate_left:
-                    st.button(
-                        "↶ 90°",
-                        key=f"photo_rotate_left_{photo['id']}_{current_index}",
-                        use_container_width=True,
-                        on_click=_rotate_gallery_photo,
-                        args=(photo["id"], current_index, -90),
-                    )
-                with counter:
-                    if len(photo_images) > 1:
-                        st.caption(f"Photo {current_index + 1} sur {len(photo_images)}")
-                with rotate_right:
-                    st.button(
-                        "↻ 90°",
-                        key=f"photo_rotate_right_{photo['id']}_{current_index}",
-                        use_container_width=True,
-                        on_click=_rotate_gallery_photo,
-                        args=(photo["id"], current_index, 90),
-                    )
+                if len(photo_images) > 1:
+                    st.caption(f"Photo {current_index + 1} sur {len(photo_images)}")
 
     render_contents()
 
@@ -450,6 +436,81 @@ def render_admin() -> None:
         st.rerun()
     if form_was_reset:
         st.success("Souvenir publié avec succès !")
+
+    if st.button("\u270f\ufe0f Modifier un souvenir" if not st.session_state.get("admin_edit_mode") else "Retour a la creation", use_container_width=True):
+        st.session_state.admin_edit_mode = not st.session_state.get("admin_edit_mode", False)
+        st.rerun()
+    if st.session_state.pop("photo_updated", False):
+        st.success("Souvenir mis à jour avec succès !")
+
+    if st.session_state.get("admin_edit_mode", False):
+        st.subheader("Modifier un souvenir")
+        try:
+            editable_photos = get_photos("thibaut") + get_photos("clara")
+        except RuntimeError as error:
+            st.error(str(error))
+            editable_photos = []
+
+        if not editable_photos:
+            st.info("Aucun souvenir a modifier.")
+            st.stop()
+
+        selected_photo = st.selectbox(
+            "Souvenir a modifier",
+            options=editable_photos,
+            format_func=lambda item: f"{PROFILES.get(item.get('profile'), item.get('profile', ''))} - {item.get('title') or 'Sans titre'}",
+            index=None,
+            placeholder="Choisissez un souvenir",
+            key="edit_photo_selection",
+        )
+        if selected_photo is None:
+            st.stop()
+
+        photo_id = selected_photo["id"]
+        with st.form(f"edit_photo_form_{photo_id}"):
+            edit_title = st.text_input("Titre / legende", value=selected_photo.get("title") or "", key=f"edit_{photo_id}_title")
+            edit_category = st.text_input("Categorie", value=selected_photo.get("category") or "", key=f"edit_{photo_id}_category")
+            edit_location = st.text_input("Lieu", value=selected_photo.get("location") or "", key=f"edit_{photo_id}_location")
+            coord1, coord2 = st.columns(2)
+            with coord1:
+                try:
+                    edit_latitude = float(selected_photo["latitude"]) if selected_photo.get("latitude") is not None else None
+                except (TypeError, ValueError):
+                    edit_latitude = None
+                edit_latitude = st.number_input("Latitude", value=edit_latitude, min_value=-90.0, max_value=90.0, format="%.6f", key=f"edit_{photo_id}_latitude")
+            with coord2:
+                try:
+                    edit_longitude = float(selected_photo["longitude"]) if selected_photo.get("longitude") is not None else None
+                except (TypeError, ValueError):
+                    edit_longitude = None
+                edit_longitude = st.number_input("Longitude", value=edit_longitude, min_value=-180.0, max_value=180.0, format="%.6f", key=f"edit_{photo_id}_longitude")
+            edit_start = st.date_input("Date de debut", value=_date_input_value(selected_photo.get("date_start")), format="DD/MM/YYYY", key=f"edit_{photo_id}_start")
+            edit_end = st.date_input("Date de fin", value=_date_input_value(selected_photo.get("date_end")), format="DD/MM/YYYY", key=f"edit_{photo_id}_end")
+            edit_content = st.text_area("Description", value=selected_photo.get("content") or "", key=f"edit_{photo_id}_content")
+            edit_emoji = st.text_input("Emoji", value=selected_photo.get("emoji") or "", key=f"edit_{photo_id}_emoji")
+            save_edit = st.form_submit_button("Enregistrer les modifications", type="primary", use_container_width=True)
+        if save_edit:
+            if edit_end and edit_start and edit_end < edit_start:
+                st.error("La date de fin doit etre egale ou posterieure a la date de debut.")
+            elif not edit_title.strip():
+                st.error("Le titre est obligatoire.")
+            else:
+                try:
+                    update_photo(photo_id=photo_id, values={
+                        "title": edit_title.strip(), "category": edit_category.strip() or None,
+                        "location": edit_location.strip() or None,
+                        "latitude": edit_latitude, "longitude": edit_longitude,
+                        "date_start": _date_as_utc_timestamp(edit_start),
+                        "date_end": _date_as_utc_timestamp(edit_end),
+                        "content": edit_content.strip() or None, "emoji": edit_emoji.strip() or None,
+                    })
+                    get_photos.clear()
+                    get_map_photos.clear()
+                    st.session_state.photo_updated = True
+                    st.rerun()
+                except RuntimeError as error:
+                    st.error(str(error))
+        st.stop()
 
     with st.expander("Gérer les souvenirs publiés"):
         profile_to_manage = st.selectbox(

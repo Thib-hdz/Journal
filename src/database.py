@@ -103,6 +103,26 @@ def insert_photo(
         raise RuntimeError("Impossible d'enregistrer l'entrée dans la base.") from error
 
 
+def update_photo(*, photo_id: int, values: dict[str, Any]) -> dict[str, Any]:
+    """Met à jour un souvenir et retourne la ligne confirmée par Supabase."""
+    try:
+        response = (
+            get_supabase_client()
+            .table("photos")
+            .update(values)
+            .eq("id", photo_id)
+            .select()
+            .execute()
+        )
+        if not response.data:
+            raise RuntimeError("Supabase n'a confirmé la modification d'aucun souvenir.")
+        return response.data[0]
+    except RuntimeError:
+        raise
+    except Exception as error:
+        raise RuntimeError("Impossible de modifier le souvenir dans la base.") from error
+
+
 def _storage_object_path(image_url: str | None) -> str | None:
     """Extrait le chemin d'un objet public de notre bucket, sinon renvoie None."""
     if not image_url:
