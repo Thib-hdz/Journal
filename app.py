@@ -57,6 +57,23 @@ st.markdown(
         color: #1f2937 !important;
     }}
     [data-testid="stButton"] button {{ border-radius: 10px; }}
+    [data-testid="stSidebarCollapseButton"],
+    [data-testid="stSidebarExpandButton"],
+    [data-testid="stExpandSidebarButton"] {{
+        width: auto;
+        min-width: 2.5rem;
+        padding: 0 0.65rem;
+        gap: 0.4rem;
+    }}
+    [data-testid="stSidebarCollapseButton"] svg,
+    [data-testid="stSidebarExpandButton"] svg,
+    [data-testid="stExpandSidebarButton"] svg {{ display: none; }}
+    [data-testid="stSidebarCollapseButton"]::after,
+    [data-testid="stSidebarExpandButton"]::after,
+    [data-testid="stExpandSidebarButton"]::after {{
+        content: "Changer de vue";
+        white-space: nowrap;
+    }}
     </style>
     """,
     unsafe_allow_html=True,
@@ -71,17 +88,21 @@ with st.sidebar:
     st.title("Journal familial")
     page = st.radio(
         "Navigation",
-        ["📖 Le Journal", "🗺️ Carte interactive", "🔒 Espace Admin"],
+        [
+            "\U0001F4D6 Le Journal",
+            "\U0001F5FA\ufe0f Carte interactive",
+            "\U0001F512 Espace Admin",
+        ],
     )
     st.divider()
     render_profile_switch(profile)
-    if page == "📖 Le Journal":
+    if page == "\U0001F4D6 Le Journal":
         gallery_photos = render_gallery_sidebar(profile)
     st.caption("Les souvenirs et aventures que nous partageons.")
 
-if page == "📖 Le Journal":
+if page == "\U0001F4D6 Le Journal":
     render_gallery(profile, gallery_photos)
-elif page == "🗺️ Carte interactive":
+elif page == "\U0001F5FA\ufe0f Carte interactive":
     render_map()
 else:
     render_admin()

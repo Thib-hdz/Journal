@@ -5,11 +5,13 @@ from __future__ import annotations
 import hmac
 import html
 import json
+import unicodedata
 from datetime import date, datetime, time, timezone
 from typing import Any
 
 import streamlit as st
 import folium
+from folium.plugins import MarkerCluster
 from streamlit_searchbox import st_searchbox
 from streamlit_folium import st_folium
 
@@ -25,6 +27,10 @@ from src.geocoding import search_locations
 from src.image_utils import compress_image
 
 PROFILES = {"thibaut": "Thibaut", "clara": "Clara"}
+
+
+def _category_label(photo: dict[str, Any]) -> str:
+    return str(photo.get("category") or "Non classé").strip() or "Non classé"
 
 
 def _date_as_utc_timestamp(value: date | None) -> str | None:
@@ -110,80 +116,143 @@ def _photo_images(photo: dict[str, Any]) -> list[str]:
     return [decoded] if isinstance(decoded, str) and decoded else []
 
 
-def _change_gallery_index(photo_id: int, image_count: int, step: int) -> None:
-    key = f"photo_gallery_index_{photo_id}"
-    st.session_state[key] = (st.session_state.get(key, 0) + step) % image_count
+def _toggle_card_content(key: str) -> None:
+    st.session_state[key] = not st.session_state.get(key, False)
 
 
 def _show_photo_dialog(photo: dict[str, Any]) -> None:
-    """Ouvre le détail avec le texte avant une galerie de vignettes."""
-    title = photo.get("title") or "Sans titre"
-
-    @st.dialog(title, width="large")
+    """Ouvre une galerie plein cadre navigable par gestes tactiles."""
+    @st.dialog("Galerie photo", width="large")
     def render_contents() -> None:
-        if photo.get("category"):
-            st.caption(photo["category"])
-        if photo.get("date_start") or photo.get("date_end"):
-            start = _format_date(photo.get("date_start")) if photo.get("date_start") else "?"
-            end = _format_date(photo.get("date_end")) if photo.get("date_end") else "?"
-            st.caption(f"{start} – {end}")
-        if photo.get("location"):
-            st.caption(f"📍 {photo['location']}")
-        if photo.get("emoji"):
-            st.markdown(photo["emoji"])
-        if photo.get("content"):
-            st.write(photo["content"])
-
         photo_images = _photo_images(photo)
-        if photo_images:
-            gallery_key = f"photo_gallery_index_{photo['id']}"
-            st.session_state.setdefault(gallery_key, 0)
-            st.session_state[gallery_key] %= len(photo_images)
-            current_index = st.session_state[gallery_key]
-            st.markdown(
-                f"""
-                <style>
-                [role="dialog"] [data-testid="stImage"] img {{
-                    display: block;
-                    width: auto !important;
-                    height: auto !important;
-                    max-width: 100% !important;
-                    max-height: 70vh !important;
-                    object-fit: contain;
-                    border-radius: 10px;
-                    background: transparent;
-                    margin: 0 auto;
-                }}
-                </style>
-                """,
-                unsafe_allow_html=True,
-            )
-            previous, image_area, following = st.columns([1, 10, 1])
-            with previous:
-                st.button(
-                    "←",
-                    key=f"photo_gallery_previous_{photo['id']}",
-                    disabled=len(photo_images) < 2,
-                    use_container_width=True,
-                    on_click=_change_gallery_index,
-                    args=(photo["id"], len(photo_images), -1),
-                )
-            with following:
-                st.button(
-                    "→",
-                    key=f"photo_gallery_next_{photo['id']}",
-                    disabled=len(photo_images) < 2,
-                    use_container_width=True,
-                    on_click=_change_gallery_index,
-                    args=(photo["id"], len(photo_images), 1),
-                )
-            with image_area:
-                st.image(
-                    photo_images[current_index],
-                    use_container_width=True,
-                )
-                if len(photo_images) > 1:
-                    st.caption(f"Photo {current_index + 1} sur {len(photo_images)}")
+        if not photo_images:
+            return
+
+        gallery_key = f"photo_gallery_index_{photo['id']}"
+        st.session_state.setdefault(gallery_key, 0)
+        initial_index = st.session_state[gallery_key] % len(photo_images)
+        image_urls = json.dumps(photo_images).replace("<", "\\u003c")
+        gallery_html = r"""
+        <style>
+          html, body { margin: 0; padding: 0; overflow: hidden; background: #111; }
+          .gallery-controls {
+            display: flex; justify-content: flex-end; gap: .5rem;
+            padding: .25rem .5rem; background: #111;
+          }
+          .gallery-controls button {
+            width: 2.5rem; height: 2.5rem; border: 0; border-radius: 50%;
+            color: white; background: #333; font-size: 1.4rem; cursor: pointer;
+          }
+          .viewer {
+            width: 100%; height: min(78vh, 680px); min-height: 300px;
+            display: flex; align-items: center; justify-content: center;
+            overflow: hidden; background: #111; touch-action: none;
+            user-select: none; -webkit-user-select: none;
+          }
+          .viewer img {
+            width: 100%; height: 100%; object-fit: contain;
+            transform-origin: center center; will-change: transform;
+            pointer-events: none; -webkit-user-drag: none;
+          }
+        </style>
+        <div class="gallery-controls">
+          <button id="previous" type="button" aria-label="Photo précédente">&#8592;</button>
+          <button id="next" type="button" aria-label="Photo suivante">&#8594;</button>
+        </div>
+        <div class="viewer" id="viewer"><img id="photo" draggable="false"></div>
+        <script>
+          const images = __IMAGES__;
+          let index = __INDEX__;
+          const viewer = document.getElementById("viewer");
+          const photo = document.getElementById("photo");
+          const pointers = new Map();
+          let scale = 1, offsetX = 0, offsetY = 0;
+          let gesture = null, lastTap = 0;
+          const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+          const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+          function draw() {
+            photo.src = images[index];
+            photo.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(${scale})`;
+          }
+          function changePhoto(step) {
+            index = (index + step + images.length) % images.length;
+            scale = 1; offsetX = 0; offsetY = 0; draw();
+          }
+          document.getElementById("previous").addEventListener("click", () => changePhoto(-1));
+          document.getElementById("next").addEventListener("click", () => changePhoto(1));
+          function clampPan() {
+            const maxX = viewer.clientWidth * (scale - 1) / 2;
+            const maxY = viewer.clientHeight * (scale - 1) / 2;
+            offsetX = clamp(offsetX, -maxX, maxX);
+            offsetY = clamp(offsetY, -maxY, maxY);
+          }
+          viewer.addEventListener("pointerdown", event => {
+            event.preventDefault();
+            viewer.setPointerCapture(event.pointerId);
+            pointers.set(event.pointerId, {x: event.clientX, y: event.clientY});
+            if (pointers.size === 2) {
+              const pair = [...pointers.values()];
+              gesture = {mode: "pinch", startDistance: distance(pair[0], pair[1]), startScale: scale};
+            } else {
+              gesture = {mode: "single", startX: event.clientX, startY: event.clientY,
+                lastX: event.clientX, lastY: event.clientY, startOffsetX: offsetX,
+                startOffsetY: offsetY, moved: false};
+            }
+          });
+          viewer.addEventListener("pointermove", event => {
+            if (!pointers.has(event.pointerId)) return;
+            pointers.set(event.pointerId, {x: event.clientX, y: event.clientY});
+            if (pointers.size >= 2 && gesture?.mode === "pinch") {
+              const pair = [...pointers.values()];
+              scale = clamp(gesture.startScale * distance(pair[0], pair[1]) / gesture.startDistance, 1, 4);
+              if (scale === 1) { offsetX = 0; offsetY = 0; }
+              clampPan(); draw();
+            } else if (pointers.size === 1 && gesture?.mode === "single") {
+              const dx = event.clientX - gesture.startX;
+              const dy = event.clientY - gesture.startY;
+              gesture.lastX = event.clientX; gesture.lastY = event.clientY;
+              if (Math.abs(dx) > 8 || Math.abs(dy) > 8) gesture.moved = true;
+              if (scale > 1) {
+                offsetX = gesture.startOffsetX + dx;
+                offsetY = gesture.startOffsetY + dy;
+                clampPan(); draw();
+              }
+            }
+          });
+          function endPointer(event) {
+            const priorGesture = gesture;
+            pointers.delete(event.pointerId);
+            if (pointers.size === 1) {
+              const remaining = [...pointers.values()][0];
+              gesture = {mode: "single", startX: remaining.x, startY: remaining.y,
+                lastX: remaining.x, lastY: remaining.y, startOffsetX: offsetX,
+                startOffsetY: offsetY, moved: true};
+              return;
+            }
+            if (pointers.size === 0) {
+              if (priorGesture?.mode === "single" && scale === 1) {
+                const dx = event.clientX - priorGesture.startX;
+                const dy = event.clientY - priorGesture.startY;
+                if (Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy) * 1.25) changePhoto(dx < 0 ? 1 : -1);
+              }
+              gesture = null;
+            }
+          }
+          viewer.addEventListener("pointerup", endPointer);
+          viewer.addEventListener("pointercancel", endPointer);
+          viewer.addEventListener("click", () => {
+            const now = Date.now();
+            if (now - lastTap < 320) {
+              scale = scale > 1 ? 1 : 2;
+              if (scale === 1) { offsetX = 0; offsetY = 0; }
+              clampPan(); draw(); lastTap = 0;
+            } else lastTap = now;
+          });
+          draw();
+        </script>
+        """
+        gallery_html = gallery_html.replace("__IMAGES__", image_urls).replace("__INDEX__", str(initial_index))
+        st.components.v1.html(gallery_html, height=680, scrolling=False)
 
     render_contents()
 
@@ -271,7 +340,6 @@ def render_gallery(
     if not photos:
         st.info("Le journal est encore vide. Ajoutez le premier souvenir depuis l'espace admin.")
         return
-
     st.markdown(
         """
         <style>
@@ -308,20 +376,34 @@ def render_gallery(
                     st.markdown(photo["emoji"])
                 content = (photo.get("content") or "").strip()
                 if content:
-                    excerpt = content[:280].rstrip()
-                    if len(content) > 280:
-                        excerpt += "…"
-                    st.write(excerpt)
-                if st.button(
-                    "Lire plus et voir la galerie",
-                    key=f"enlarge_{photo['id']}",
-                    use_container_width=True,
-                ):
-                    _show_photo_dialog(photo)
+                    content_key = f"expanded_content_{photo['id']}"
+                    expanded = st.session_state.get(content_key, False)
+                    if len(content) > 280 and not expanded:
+                        st.write(content[:280].rstrip() + "\u2026")
+                        st.button(
+                            "Lire plus",
+                            key=f"read_more_{photo['id']}",
+                            on_click=_toggle_card_content,
+                            args=(content_key,),
+                        )
+                    else:
+                        st.write(content)
+                        if len(content) > 280:
+                            st.button(
+                                "Lire moins",
+                                key=f"read_less_{photo['id']}",
+                                on_click=_toggle_card_content,
+                                args=(content_key,),
+                            )
             with image_column:
                 st.image(_photo_preview(photo), use_container_width=True)
-
-
+                if _photo_images(photo):
+                    if st.button(
+                        "\U0001F4F7 Voir les photos",
+                        key=f"view_photos_{photo['id']}",
+                        use_container_width=True,
+                    ):
+                        _show_photo_dialog(photo)
 def render_map() -> None:
     """Affiche sur une carte les souvenirs de tous les profils géolocalisés."""
     st.title("🗺️ Carte interactive")
@@ -331,7 +413,7 @@ def render_map() -> None:
         st.error(str(error))
         return
 
-    grouped_locations: dict[tuple[float, float], list[dict[str, Any]]] = {}
+    geolocated_photos: list[dict[str, Any]] = []
     for photo in photos:
         try:
             latitude = float(photo["latitude"])
@@ -339,23 +421,97 @@ def render_map() -> None:
         except (KeyError, TypeError, ValueError):
             continue
         if -90 <= latitude <= 90 and -180 <= longitude <= 180:
-            grouped_locations.setdefault((latitude, longitude), []).append(photo)
+            geolocated_photos.append(photo)
 
-    if not grouped_locations:
+    if not geolocated_photos:
         st.info("Aucun souvenir géolocalisé pour le moment.")
         return
 
-    center = [
-        sum(latitude for latitude, _ in grouped_locations) / len(grouped_locations),
-        sum(longitude for _, longitude in grouped_locations) / len(grouped_locations),
+    trip_titles = sorted(
+        {str(photo.get("title") or "Sans titre") for photo in geolocated_photos},
+        key=str.casefold,
+    )
+    selected_titles = st.multiselect(
+        "Filtrer par voyage",
+        options=trip_titles,
+        placeholder="Tous les voyages",
+        help="Choisissez un ou plusieurs titres pour filtrer les lieux affichés. Videz la sélection pour tout réafficher.",
+        key="map_trip_filter",
+    )
+    selected_photos = [
+        photo
+        for photo in geolocated_photos
+        if not selected_titles
+        or str(photo.get("title") or "Sans titre") in selected_titles
     ]
-    map_view = folium.Map(location=center, zoom_start=4, control_scale=True)
-    for (latitude, longitude), grouped_photos in grouped_locations.items():
+
+    grouped_locations: dict[tuple[float, float, str], list[dict[str, Any]]] = {}
+    for photo in selected_photos:
+        location = (
+            float(photo["latitude"]),
+            float(photo["longitude"]),
+            _category_label(photo),
+        )
+        grouped_locations.setdefault(location, []).append(photo)
+
+    if not grouped_locations:
+        st.info("Aucun lieu ne correspond aux titres sélectionnés.")
+        return
+
+    center = [
+        sum(latitude for latitude, _, _ in grouped_locations) / len(grouped_locations),
+        sum(longitude for _, longitude, _ in grouped_locations) / len(grouped_locations),
+    ]
+    map_view = folium.Map(
+        location=center,
+        zoom_start=4,
+        tiles=None,
+        control_scale=True,
+    )
+    folium.TileLayer(
+        tiles="CartoDB Voyager",
+        name="Carte claire",
+        overlay=False,
+        control=True,
+    ).add_to(map_view)
+    folium.TileLayer(
+        tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        attr="Tiles © Esri — Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community",
+        name="Vue satellite",
+        overlay=False,
+        control=True,
+    ).add_to(map_view)
+    marker_cluster = MarkerCluster(
+        name="Souvenirs",
+        show=True,
+        options={"showCoverageOnHover": False, "zoomToBoundsOnClick": True},
+    ).add_to(map_view)
+    category_colors: dict[str, str] = {}
+    fallback_colors = ["green", "purple", "orange", "cadetblue", "darkred", "darkgreen", "darkpurple", "pink", "gray", "darkblue"]
+    fallback_color_index = 0
+    for category in sorted({_category_label(photo) for photo in geolocated_photos}, key=str.casefold):
+        normalized = "".join(
+            char
+            for char in unicodedata.normalize("NFKD", category).casefold()
+            if not unicodedata.combining(char)
+        )
+        if "voyage" in normalized:
+            category_colors[category] = "red"
+        elif "travail" in normalized:
+            category_colors[category] = "blue"
+        elif normalized == "non classe":
+            category_colors[category] = "gray"
+        else:
+            category_colors[category] = fallback_colors[fallback_color_index % len(fallback_colors)]
+            fallback_color_index += 1
+
+    for (latitude, longitude, category), grouped_photos in grouped_locations.items():
         place_name = next(
             (photo["location"] for photo in grouped_photos if photo.get("location")),
             "Lieu inconnu",
         )
         location_markup = html.escape(str(place_name))
+        category_markup = html.escape(category)
         memories_markup = "".join(
             "<li>"
             f"<time>{html.escape(_format_date(photo.get('date_start') or photo.get('created_at')))}</time>"
@@ -364,20 +520,44 @@ def render_map() -> None:
         )
         popup_html = (
             f'<div style="min-width:220px"><strong>{location_markup}</strong>'
+            f'<div style="color:#4b5563;font-size:.9em">{category_markup}</div>'
             f"<ul style=\"margin:8px 0 0;padding-left:20px\">{memories_markup}</ul></div>"
         )
         folium.Marker(
             location=[latitude, longitude],
-            tooltip=f"{place_name} · {len(grouped_photos)} souvenir(s)",
+            tooltip=f"{place_name} · {category} · {len(grouped_photos)} souvenir(s)",
             popup=folium.Popup(popup_html, max_width=260),
-            icon=folium.Icon(color="red", icon="map-marker", prefix="fa"),
-        ).add_to(map_view)
+            icon=folium.Icon(
+                color=category_colors[category],
+                icon="map-marker",
+                prefix="fa",
+            ),
+        ).add_to(marker_cluster)
 
     if len(grouped_locations) > 1:
         map_view.fit_bounds(
-            [[latitude, longitude] for latitude, longitude in grouped_locations],
+            [[latitude, longitude] for latitude, longitude, _ in grouped_locations],
             padding=(24, 24),
         )
+    color_hex = {
+        "red": "#d63b35", "blue": "#2d6ca2", "green": "#2e8b57",
+        "purple": "#6f42a5", "orange": "#e87924", "cadetblue": "#5f9ea0",
+        "darkred": "#8b0000", "darkgreen": "#006400", "darkpurple": "#4b0082",
+        "pink": "#d66b9b", "gray": "#707070", "darkblue": "#17365d",
+    }
+    legend_markup = "".join(
+        '<span style="display:inline-flex;align-items:center;gap:6px;white-space:nowrap">'
+        f'<span style="width:12px;height:12px;border-radius:50%;background:{color_hex[category_colors[category]]}"></span>'
+        f"{html.escape(category)}</span>"
+        for category in sorted({_category_label(photo) for photo in selected_photos}, key=str.casefold)
+    )
+    st.markdown(
+        '<div style="display:flex;flex-wrap:wrap;gap:12px;margin:.25rem 0 .75rem">'
+        + legend_markup
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+    folium.LayerControl(position="topright", collapsed=False).add_to(map_view)
     st_folium(map_view, height=650, use_container_width=True, returned_objects=[])
 
 

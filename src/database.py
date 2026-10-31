@@ -56,7 +56,7 @@ def get_map_photos() -> list[dict[str, Any]]:
             get_supabase_client()
             .table("photos")
             .select(
-                "id, title, location, date_start, created_at, latitude, longitude"
+                "id, title, category, location, date_start, created_at, latitude, longitude"
             )
             .order("created_at", desc=True)
             .execute()
