@@ -159,215 +159,145 @@ def _toggle_card_content(key: str) -> None:
 
 
 def _show_photo_dialog(photo: dict[str, Any]) -> None:
-    """Ouvre une galerie adaptée au bureau et au mobile, avec zoom tactile."""
+    """Affiche les photos en liste, avec une visionneuse plein ecran par photo."""
     @st.dialog("Galerie photo", width="large")
     def render_contents() -> None:
-        photo_images = _photo_images(photo)
-        if not photo_images:
+        images = _photo_images(photo)
+        if not images:
             return
 
-        st.markdown(
-            """
-            <style>
-              div[data-testid="stDialog"] div[role="dialog"] {
-                box-sizing: border-box !important;
-                position: fixed !important;
-                inset: 0 !important;
-                width: 100vw !important;
-                max-width: 100vw !important;
-                height: 100dvh !important;
-                max-height: 100dvh !important;
-                margin: 0 !important;
-                padding: 0 !important;
-                border-radius: 0 !important;
-                background: #080a10 !important;
-                overflow: hidden !important;
-                transform: none !important;
-              }
-              div[data-testid="stDialog"] div[role="dialog"] h2 {
-                position: fixed !important;
-                top: max(env(safe-area-inset-top), 1rem) !important;
-                left: max(env(safe-area-inset-left), 1rem) !important;
-                z-index: 10000 !important;
-                margin: 0 !important;
-                color: #fff !important;
-                font-size: 1.25rem !important;
-              }
-              div[data-testid="stDialog"] div[role="dialog"] iframe {
-                position: fixed !important;
-                inset: 0 !important;
-                width: 100vw !important;
-                max-width: 100vw !important;
-                height: 100dvh !important;
-                max-height: 100dvh !important;
-                border: 0 !important;
-                z-index: 10 !important;
-              }
-              div[data-testid="stDialog"] div[role="dialog"] button[aria-label="Close"],
-              div[data-testid="stDialog"] div[role="dialog"] button[aria-label="Fermer"] {
-                position: fixed !important;
-                top: max(env(safe-area-inset-top), .75rem) !important;
-                right: max(env(safe-area-inset-right), .75rem) !important;
-                z-index: 10001 !important;
-                width: 2.75rem !important;
-                height: 2.75rem !important;
-                border: 1px solid rgba(255,255,255,.35) !important;
-                border-radius: 50% !important;
-                color: #fff !important;
-                background: rgba(30,30,30,.72) !important;
-                backdrop-filter: blur(8px);
-              }
-            </style>
-            """,
-            unsafe_allow_html=True,
-        )
+        fullscreen_key = f"photo_gallery_fullscreen_{photo['id']}"
+        selected_index = st.session_state.get(fullscreen_key)
 
-        gallery_key = f"photo_gallery_index_{photo['id']}"
-        st.session_state.setdefault(gallery_key, 0)
-        initial_index = st.session_state[gallery_key] % len(photo_images)
-        image_urls = json.dumps(photo_images).replace("<", "\\u003c")
-        gallery_html = r"""
-        <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-        <style>
-          html, body { width:100%; height:100%; margin:0; padding:0; overflow:hidden; background:#080a10; }
-          .gallery-controls { position:absolute; inset:0; z-index:2; pointer-events:none; }
-          .gallery-controls button {
-            position:absolute; top:50%; transform:translateY(-50%);
-            width:3rem; height:3rem; border:1px solid rgba(255,255,255,.3);
-            border-radius:50%; color:white; background:rgba(35,35,35,.68);
-            font-size:1.7rem; cursor:pointer; pointer-events:auto; backdrop-filter:blur(8px);
-          }
-          #previous { left:max(env(safe-area-inset-left), .75rem); }
-          #next { right:max(env(safe-area-inset-right), .75rem); }
-          .viewer {
-            position:absolute; inset:0; width:100vw; height:100dvh;
-            display:flex; align-items:center; justify-content:center;
-            overflow:hidden; background:#080a10; touch-action:none;
-            user-select:none; -webkit-user-select:none;
-          }
-          .viewer::before {
-            content:""; position:absolute; inset:-32px; z-index:0;
-            background-image:var(--photo-background); background-size:cover; background-position:center;
-            filter:blur(28px) brightness(.42); opacity:.72; transform:scale(1.06);
-          }
-          .viewer img {
-            position:relative; z-index:1; display:block; object-fit:contain;
-            max-width:100%; max-height:100%; transform-origin:center center;
-            will-change:transform; pointer-events:none; -webkit-user-drag:none;
-            box-shadow:0 12px 48px rgba(0,0,0,.32);
-          }
-          @media (min-width: 701px) {
-            .viewer img { max-width:min(72vw, 1100px); max-height:72vh; }
-          }
-          @media (max-width: 700px) {
-            .viewer img { max-width:96vw; max-height:88dvh; }
-            .gallery-controls button { width:2.75rem; height:2.75rem; }
-          }
-        </style>
-        <div class="gallery-controls">
-          <button id="previous" type="button" aria-label="Photo précédente">&#8592;</button>
-          <button id="next" type="button" aria-label="Photo suivante">&#8594;</button>
-        </div>
-        <div class="viewer" id="viewer"><img id="photo" draggable="false"></div>
-        <script>
-          const images = __IMAGES__;
-          let index = __INDEX__;
-          const viewer = document.getElementById("viewer");
-          const photo = document.getElementById("photo");
-          const pointers = new Map();
-          let scale = 1, offsetX = 0, offsetY = 0;
-          let gesture = null, lastTap = 0;
-          const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
-          const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
-          function fitImage() {
-            if (!photo.naturalWidth || !photo.naturalHeight) return;
-            const mobile = window.matchMedia("(max-width: 700px)").matches;
-            const maxHeight = window.innerHeight * (mobile ? 0.88 : 0.72);
-            const maxWidth = mobile ? viewer.clientWidth * 0.96 : Math.min(viewer.clientWidth * 0.72, 1100);
-            const ratio = photo.naturalWidth / photo.naturalHeight;
-            const width = Math.min(maxWidth, maxHeight * ratio);
-            photo.style.width = `${width}px`;
-            photo.style.height = `${width / ratio}px`;
-          }
-          function draw() {
-            photo.src = images[index];
-            viewer.style.setProperty("--photo-background", `url("${images[index]}")`);
-            photo.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(${scale})`;
-          }
-          photo.addEventListener("load", fitImage);
-          window.addEventListener("resize", fitImage);
-          function changePhoto(step) {
-            index = (index + step + images.length) % images.length;
-            scale = 1; offsetX = 0; offsetY = 0; draw();
-          }
-          document.getElementById("previous").addEventListener("click", () => changePhoto(-1));
-          document.getElementById("next").addEventListener("click", () => changePhoto(1));
-          function clampPan() {
-            const maxX = photo.clientWidth * (scale - 1) / 2;
-            const maxY = photo.clientHeight * (scale - 1) / 2;
-            offsetX = clamp(offsetX, -maxX, maxX);
-            offsetY = clamp(offsetY, -maxY, maxY);
-          }
-          viewer.addEventListener("pointerdown", event => {
-            event.preventDefault();
-            viewer.setPointerCapture(event.pointerId);
-            pointers.set(event.pointerId, {x:event.clientX, y:event.clientY});
-            if (pointers.size === 2) {
-              const pair = [...pointers.values()];
-              gesture = {mode:"pinch", startDistance:distance(pair[0], pair[1]), startScale:scale};
-            } else {
-              gesture = {mode:"single", startX:event.clientX, startY:event.clientY,
-                startOffsetX:offsetX, startOffsetY:offsetY};
-            }
-          });
-          viewer.addEventListener("pointermove", event => {
-            if (!pointers.has(event.pointerId)) return;
-            pointers.set(event.pointerId, {x:event.clientX, y:event.clientY});
-            if (pointers.size >= 2 && gesture?.mode === "pinch") {
-              const pair = [...pointers.values()];
-              scale = clamp(gesture.startScale * distance(pair[0], pair[1]) / gesture.startDistance, 1, 4);
-              if (scale === 1) { offsetX = 0; offsetY = 0; }
-              clampPan(); photo.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(${scale})`;
-            } else if (pointers.size === 1 && gesture?.mode === "single" && scale > 1) {
-              offsetX = gesture.startOffsetX + event.clientX - gesture.startX;
-              offsetY = gesture.startOffsetY + event.clientY - gesture.startY;
-              clampPan(); photo.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(${scale})`;
-            }
-          });
-          function endPointer(event) {
-            const priorGesture = gesture;
-            pointers.delete(event.pointerId);
-            if (pointers.size === 1) {
-              const remaining = [...pointers.values()][0];
-              gesture = {mode:"single", startX:remaining.x, startY:remaining.y,
-                startOffsetX:offsetX, startOffsetY:offsetY};
-              return;
-            }
-            if (pointers.size === 0) {
-              if (priorGesture?.mode === "single" && scale === 1) {
-                const dx = event.clientX - priorGesture.startX;
-                const dy = event.clientY - priorGesture.startY;
-                if (Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy) * 1.25) changePhoto(dx < 0 ? 1 : -1);
-              }
-              gesture = null;
-            }
-          }
-          viewer.addEventListener("pointerup", endPointer);
-          viewer.addEventListener("pointercancel", endPointer);
-          viewer.addEventListener("click", () => {
-            const now = Date.now();
-            if (now - lastTap < 320) {
-              scale = scale > 1 ? 1 : 2;
-              if (scale === 1) { offsetX = 0; offsetY = 0; }
-              clampPan(); photo.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(${scale})`;
-              lastTap = 0;
-            } else lastTap = now;
-          });
-          draw();
-        </script>
-        """
-        gallery_html = gallery_html.replace("__IMAGES__", image_urls).replace("__INDEX__", str(initial_index))
-        st.components.v1.html(gallery_html, height=900, scrolling=False)
+        if selected_index is None:
+            st.markdown(
+                """
+                <style>
+                  div[data-testid="stDialog"] div[role="dialog"] {
+                    box-sizing:border-box !important; position:fixed !important;
+                    top:50% !important; left:50% !important; transform:translate(-50%,-50%) !important;
+                    width:min(960px,94vw) !important; max-width:94vw !important;
+                    max-height:90dvh !important; overflow-y:auto !important;
+                    padding:1.25rem !important; border-radius:1rem !important;
+                    color:#f5f5f5 !important; background:#15171d !important;
+                  }
+                  div[data-testid="stDialog"] div[role="dialog"] [data-testid="stImage"] {
+                    display:flex; justify-content:center; margin:0 auto .5rem;
+                  }
+                  div[data-testid="stDialog"] div[role="dialog"] [data-testid="stImage"] img {
+                    width:auto !important; max-width:min(100%,760px) !important;
+                    height:auto !important; max-height:58vh !important; object-fit:contain !important;
+                    border-radius:.5rem;
+                  }
+                  @media (max-width:700px) {
+                    div[data-testid="stDialog"] div[role="dialog"] {
+                      top:4dvh !important; left:2vw !important; transform:none !important;
+                      width:96vw !important; max-width:96vw !important; max-height:92dvh !important;
+                      padding:.8rem !important; border-radius:.8rem !important;
+                    }
+                    div[data-testid="stDialog"] div[role="dialog"] [data-testid="stImage"] img {
+                      max-width:100% !important; max-height:62dvh !important;
+                    }
+                  }
+                </style>
+                """,
+                unsafe_allow_html=True,
+            )
+            st.caption(f"{len(images)} photo(s) — sélectionne « Agrandir » pour ouvrir une photo seule.")
+            for index, image_url in enumerate(images):
+                st.image(image_url, use_container_width=True)
+                if st.button(
+                    "\U0001F50D Afficher en plein écran",
+                    key=f"gallery_expand_{photo['id']}_{index}",
+                    use_container_width=True,
+                ):
+                    st.session_state[fullscreen_key] = index
+        else:
+            image_url = images[int(selected_index) % len(images)]
+            encoded_images = json.dumps([image_url]).replace("<", "\\u003c")
+            st.markdown(
+                """
+                <style>
+                  div[data-testid="stDialog"] div[role="dialog"] {
+                    position:fixed !important; inset:0 !important; transform:none !important;
+                    box-sizing:border-box !important; width:100vw !important; max-width:100vw !important;
+                    height:100dvh !important; max-height:100dvh !important; margin:0 !important;
+                    padding:0 !important; border:0 !important; border-radius:0 !important;
+                    overflow:hidden !important; background:#080a10 !important;
+                  }
+                  div[data-testid="stDialog"] div[role="dialog"] h2 { display:none !important; }
+                  div[data-testid="stDialog"] div[role="dialog"] iframe {
+                    position:fixed !important; inset:0 !important; z-index:10 !important;
+                    width:100vw !important; max-width:100vw !important;
+                    height:100dvh !important; max-height:100dvh !important; border:0 !important;
+                  }
+                  div[data-testid="stDialog"] div[role="dialog"] button:not([aria-label]) {
+                    position:fixed !important; top:max(env(safe-area-inset-top),.75rem) !important;
+                    left:max(env(safe-area-inset-left),.75rem) !important; z-index:10002 !important;
+                    min-height:2.6rem !important; color:white !important;
+                    background:rgba(30,30,30,.8) !important; border:1px solid rgba(255,255,255,.3) !important;
+                  }
+                  div[data-testid="stDialog"] div[role="dialog"] button[aria-label="Close"],
+                  div[data-testid="stDialog"] div[role="dialog"] button[aria-label="Fermer"] {
+                    position:fixed !important; top:max(env(safe-area-inset-top),.75rem) !important;
+                    right:max(env(safe-area-inset-right),.75rem) !important; z-index:10003 !important;
+                    color:white !important; background:rgba(30,30,30,.8) !important;
+                    border:1px solid rgba(255,255,255,.3) !important; border-radius:50% !important;
+                  }
+                </style>
+                """,
+                unsafe_allow_html=True,
+            )
+            if st.button("\u2190 Retour à la galerie", key=f"gallery_back_{photo['id']}"):
+                st.session_state[fullscreen_key] = None
+            viewer_html = r"""
+            <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+            <style>
+              html,body {width:100%;height:100%;margin:0;overflow:hidden;background:#080a10}
+              #viewer {position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+                overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none}
+              #viewer::before {content:"";position:absolute;inset:-30px;z-index:0;
+                background:var(--photo-bg) center/cover;filter:blur(26px) brightness(.35);opacity:.8}
+              #photo {position:relative;z-index:1;display:block;object-fit:contain;max-width:96vw;
+                max-height:90dvh;transform-origin:center;will-change:transform;pointer-events:none;
+                -webkit-user-drag:none;box-shadow:0 12px 48px #0008}
+              @media(min-width:701px){#photo{max-width:82vw;max-height:84vh}}
+            </style>
+            <div id="viewer"><img id="photo" draggable="false"></div>
+            <script>
+              const images=__IMAGES__; const viewer=document.getElementById("viewer");
+              const photo=document.getElementById("photo"); const pointers=new Map();
+              let scale=1, offsetX=0, offsetY=0, gesture=null, lastTap=0;
+              const clamp=(v,min,max)=>Math.max(min,Math.min(max,v));
+              const distance=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+              function draw(){photo.src=images[0];viewer.style.setProperty("--photo-bg",`url("${images[0]}")`)}
+              function fit(){if(!photo.naturalWidth)return;const mobile=innerWidth<=700;
+                const maxW=innerWidth*(mobile ? .96 : .82),maxH=innerHeight*(mobile ? .90 : .84);
+                const ratio=photo.naturalWidth/photo.naturalHeight;const w=Math.min(maxW,maxH*ratio);
+                photo.style.width=`${w}px`;photo.style.height=`${w/ratio}px`}
+              photo.addEventListener("load",fit);addEventListener("resize",fit);
+              function paint(){photo.style.transform=`translate(${offsetX}px,${offsetY}px) scale(${scale})`}
+              function pan(){const mx=photo.clientWidth*(scale-1)/2,my=photo.clientHeight*(scale-1)/2;
+                offsetX=clamp(offsetX,-mx,mx);offsetY=clamp(offsetY,-my,my)}
+              viewer.addEventListener("pointerdown",e=>{e.preventDefault();viewer.setPointerCapture(e.pointerId);
+                pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+                if(pointers.size===2){const p=[...pointers.values()];gesture={mode:"pinch",d:distance(p[0],p[1]),scale}}
+                else gesture={mode:"single",x:e.clientX,y:e.clientY,ox:offsetX,oy:offsetY}});
+              viewer.addEventListener("pointermove",e=>{if(!pointers.has(e.pointerId))return;
+                pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+                if(pointers.size===2&&gesture?.mode==="pinch"){const p=[...pointers.values()];
+                  scale=clamp(gesture.scale*distance(p[0],p[1])/gesture.d,1,5);if(scale===1)offsetX=offsetY=0;pan();paint()}
+                else if(pointers.size===1&&gesture?.mode==="single"&&scale>1){
+                  offsetX=gesture.ox+e.clientX-gesture.x;offsetY=gesture.oy+e.clientY-gesture.y;pan();paint()}});
+              function end(e){const g=gesture;pointers.delete(e.pointerId);
+                if(pointers.size===1){const p=[...pointers.values()][0];gesture={mode:"single",x:p.x,y:p.y,ox:offsetX,oy:offsetY};return}
+                if(!pointers.size){if(g?.mode==="single"&&scale===1){const dx=e.clientX-g.x,dy=e.clientY-g.y;
+                  if(Math.hypot(dx,dy)<12){const now=Date.now();if(now-lastTap<320){scale=scale>1?1:2;if(scale===1)offsetX=offsetY=0;pan();paint();lastTap=0}else lastTap=now}}
+                  gesture=null}}
+              viewer.addEventListener("pointerup",end);viewer.addEventListener("pointercancel",end);draw();
+            </script>
+            """.replace("__IMAGES__", encoded_images)
+            st.components.v1.html(viewer_html, height=900, scrolling=False)
 
     render_contents()
 
