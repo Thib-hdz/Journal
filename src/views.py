@@ -171,23 +171,55 @@ def _show_photo_dialog(photo: dict[str, Any]) -> None:
             <style>
               div[data-testid="stDialog"] div[role="dialog"] {
                 box-sizing: border-box !important;
+                position: fixed !important;
+                inset: 0 !important;
                 width: 100vw !important;
                 max-width: 100vw !important;
                 height: 100dvh !important;
                 max-height: 100dvh !important;
                 margin: 0 !important;
-                padding: 1rem !important;
+                padding: 0 !important;
                 border-radius: 0 !important;
                 background: #080a10 !important;
+                overflow: hidden !important;
+                transform: none !important;
               }
               div[data-testid="stDialog"] div[role="dialog"] h2 {
-                color: #fff !important;
+                display: none !important;
               }
-              @media (max-width: 700px) {
-                div[data-testid="stDialog"] div[role="dialog"] {
-                  padding: max(env(safe-area-inset-top), .75rem) 0
-                    max(env(safe-area-inset-bottom), .75rem) !important;
-                }
+              div[data-testid="stDialog"] div[role="dialog"] iframe {
+                position: fixed !important;
+                inset: 0 !important;
+                width: 100vw !important;
+                max-width: 100vw !important;
+                height: 100dvh !important;
+                max-height: 100dvh !important;
+                border: 0 !important;
+                z-index: 10 !important;
+              }
+              div[data-testid="stDialog"] div[role="dialog"] button[aria-label="Close"],
+              div[data-testid="stDialog"] div[role="dialog"] button[aria-label="Fermer"] {
+                position: fixed !important;
+                top: max(env(safe-area-inset-top), 1rem) !important;
+                right: max(env(safe-area-inset-right), 1rem) !important;
+                z-index: 10000 !important;
+                width: 2.8rem !important;
+                height: 2.8rem !important;
+                border: 1px solid rgba(255,255,255,.3) !important;
+                border-radius: 50% !important;
+                color: #fff !important;
+                background: rgba(32,32,32,.72) !important;
+                backdrop-filter: blur(8px);
+              }
+              div[data-testid="stDialog"] div[role="dialog"] button[aria-label="Close"] svg,
+              div[data-testid="stDialog"] div[role="dialog"] button[aria-label="Fermer"] svg {
+                display: none !important;
+              }
+              div[data-testid="stDialog"] div[role="dialog"] button[aria-label="Close"]::after,
+              div[data-testid="stDialog"] div[role="dialog"] button[aria-label="Fermer"]::after {
+                content: "✕";
+                color: #fff;
+                font-size: 1.4rem;
               }
             </style>
             """,
@@ -199,21 +231,25 @@ def _show_photo_dialog(photo: dict[str, Any]) -> None:
         initial_index = st.session_state[gallery_key] % len(photo_images)
         image_urls = json.dumps(photo_images).replace("<", "\\u003c")
         gallery_html = r"""
+        <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
         <style>
-          html, body { margin: 0; padding: 0; overflow: hidden; background: #080a10; }
+          html, body { width:100%; height:100%; margin:0; padding:0; overflow:hidden; background:#080a10; }
           .gallery-controls {
-            display: flex; justify-content: flex-end; gap: .5rem;
-            box-sizing: border-box; height: 3rem; padding: .25rem .5rem;
-            background: #080a10;
+            position:absolute; inset:0; z-index:2; pointer-events:none;
           }
           .gallery-controls button {
-            width: 2.5rem; height: 2.5rem; border: 0; border-radius: 50%;
-            color: white; background: #333; font-size: 1.4rem; cursor: pointer;
+            position:absolute; top:50%; transform:translateY(-50%);
+            width:3.2rem; height:3.2rem; border:1px solid rgba(255,255,255,.25);
+            border-radius:50%; color:white; background:rgba(35,35,35,.72);
+            font-size:1.8rem; cursor:pointer; pointer-events:auto;
+            backdrop-filter:blur(8px);
           }
+          #previous { left:max(env(safe-area-inset-left), 1rem); }
+          #next { right:max(env(safe-area-inset-right), 1rem); }
           .viewer {
-            width: 100%; height: 1px; min-height: 0;
+            position:absolute; inset:0; width:100vw; height:100dvh; min-height:0;
             display: flex; align-items: center; justify-content: center;
-            overflow: hidden; background: transparent; touch-action: none;
+            overflow: hidden; background: #080a10; touch-action: none;
             user-select: none; -webkit-user-select: none;
           }
           .viewer img {
@@ -239,16 +275,12 @@ def _show_photo_dialog(photo: dict[str, Any]) -> None:
           const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
           function fitImage() {
             if (!photo.naturalWidth || !photo.naturalHeight) return;
-            const maxHeight = Math.min((window.innerHeight || 800) * 0.86, 1400);
+            const maxHeight = Math.min((window.innerHeight || 800) * 0.96, 1800);
             const ratio = photo.naturalWidth / photo.naturalHeight;
-            const width = Math.min(viewer.clientWidth, maxHeight * ratio);
+            const width = Math.min(viewer.clientWidth - 16, maxHeight * ratio);
             const height = width / ratio;
             photo.style.width = `${width}px`;
             photo.style.height = `${height}px`;
-            viewer.style.height = `${height}px`;
-            try {
-              if (window.frameElement) window.frameElement.style.height = `${height + 48}px`;
-            } catch (_) {}
           }
           function draw() {
             photo.src = images[index];
@@ -334,7 +366,7 @@ def _show_photo_dialog(photo: dict[str, Any]) -> None:
         </script>
         """
         gallery_html = gallery_html.replace("__IMAGES__", image_urls).replace("__INDEX__", str(initial_index))
-        st.components.v1.html(gallery_html, height=760, scrolling=False)
+        st.components.v1.html(gallery_html, height=900, scrolling=False)
 
     render_contents()
 
