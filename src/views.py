@@ -497,12 +497,11 @@ def _render_journal_timeline(photos: list[dict[str, Any]]) -> None:
         )
         if event_day is not None:
             items.append((event_day, photo))
-    items.sort(key=lambda item: str(item[1].get("title") or "").casefold())
-    items.sort(key=lambda item: item[0], reverse=True)
+    items.sort(key=lambda item: (item[0], str(item[1].get("title") or "").casefold()))
     if not items:
         return
 
-    newest_date, oldest_date = items[0][0], items[-1][0]
+    oldest_date, newest_date = items[0][0], items[-1][0]
     span = max(1, (newest_date - oldest_date).days)
     months = []
     cursor = date(oldest_date.year, oldest_date.month, 1)
@@ -511,7 +510,6 @@ def _render_journal_timeline(photos: list[dict[str, Any]]) -> None:
         months.append(cursor)
         next_month = cursor.month + 1
         cursor = date(cursor.year + (next_month > 12), 1 if next_month > 12 else next_month, 1)
-    months.reverse()
 
     width = max(760, len(items) * 90 + 80, len(months) * 110 + 80)
     month_names = (
@@ -521,7 +519,7 @@ def _render_journal_timeline(photos: list[dict[str, Any]]) -> None:
     ticks = []
     for index, month in enumerate(months):
         fraction = 0.5 if newest_date == oldest_date else min(
-            1, max(0, (newest_date - month).days / span)
+            1, max(0, (month - oldest_date).days / span)
         )
         left = (40 + fraction * (width - 80)) / width * 100
         edge = "timeline-first" if index == 0 else "timeline-last" if index == len(months) - 1 else ""
@@ -538,7 +536,7 @@ def _render_journal_timeline(photos: list[dict[str, Any]]) -> None:
     for index, (event_day, photo) in enumerate(items):
         seen = day_seen.get(event_day, 0)
         day_seen[event_day] = seen + 1
-        fraction = (newest_date - event_day).days / span if span > 1 else 0.5
+        fraction = (event_day - oldest_date).days / span if span > 1 else 0.5
         offset = (seen - (day_counts[event_day] - 1) / 2) * 12
         left = (40 + fraction * (width - 80) + offset) / width * 100
         title = html.escape(photo.get("title") or "Sans titre")
@@ -598,8 +596,8 @@ def _render_journal_timeline(photos: list[dict[str, Any]]) -> None:
         <div class="journal-timeline-scroll"><div class="journal-timeline-content">
           <div class="journal-timeline-track"><div class="journal-timeline-rail"></div>
             {''.join(ticks)}{''.join(markers)}</div>
-          <div class="journal-timeline-dates"><span>Dernière date : {newest_date.strftime("%d/%m/%Y")}</span>
-            <span>Première date : {oldest_date.strftime("%d/%m/%Y")}</span></div>
+          <div class="journal-timeline-dates"><span>Première date : {oldest_date.strftime("%d/%m/%Y")}</span>
+            <span>Dernière date : {newest_date.strftime("%d/%m/%Y")}</span></div>
         </div></div>
         """,
         unsafe_allow_html=True,
@@ -741,16 +739,15 @@ def render_calendar(profile: str) -> None:
         )
         if event_day is not None:
             timeline_items.append((event_day, photo))
-    timeline_items.sort(key=lambda item: str(item[1].get("title") or "").casefold())
-    timeline_items.sort(key=lambda item: item[0], reverse=True)
+    timeline_items.sort(key=lambda item: (item[0], str(item[1].get("title") or "").casefold()))
 
     st.subheader("Frise chronologique")
     st.caption("🕵️ Chaque marqueur = un souvenir. Survolez-le pour son titre, sa catégorie, son lieu et sa date; la frise fait le guide touristique !")
     if not timeline_items:
         st.caption("La frise apparaîtra dès qu’un souvenir aura une date.")
     else:
-        newest_date = timeline_items[0][0]
-        oldest_date = timeline_items[-1][0]
+        oldest_date = timeline_items[0][0]
+        newest_date = timeline_items[-1][0]
         date_span = max(1, (newest_date - oldest_date).days)
         month_ticks: list[date] = []
         month_cursor = date(oldest_date.year, oldest_date.month, 1)
@@ -763,7 +760,6 @@ def render_calendar(profile: str) -> None:
                 1 if next_month > 12 else next_month,
                 1,
             )
-        month_ticks.reverse()
         track_width = max(760, len(timeline_items) * 90 + 80, len(month_ticks) * 110 + 80)
         same_day_counts: dict[date, int] = {}
         for event_day, _ in timeline_items:
@@ -771,7 +767,7 @@ def render_calendar(profile: str) -> None:
         same_day_seen: dict[date, int] = {}
         markers = []
         for item_index, (event_day, photo) in enumerate(timeline_items):
-            fraction = (newest_date - event_day).days / date_span if date_span > 1 else 0.5
+            fraction = (event_day - oldest_date).days / date_span if date_span > 1 else 0.5
             same_day_index = same_day_seen.get(event_day, 0)
             same_day_seen[event_day] = same_day_index + 1
             same_day_offset = (same_day_index - (same_day_counts[event_day] - 1) / 2) * 12
@@ -804,7 +800,7 @@ def render_calendar(profile: str) -> None:
         for index, tick_date in enumerate(month_ticks):
             fraction = (
                 0.5 if newest_date == oldest_date else
-                min(1, max(0, (newest_date - tick_date).days / date_span))
+                min(1, max(0, (tick_date - oldest_date).days / date_span))
             )
             left_percent = (40 + fraction * (track_width - 80)) / track_width * 100
             edge = "timeline-tick-first" if index == 0 else (
@@ -815,8 +811,8 @@ def render_calendar(profile: str) -> None:
                 f'<div class="timeline-tick {edge}" style="left:{left_percent:.3f}%">'
                 f'<span>{label}</span></div>'
             )
-        start_label = html.escape(newest_date.strftime("%d/%m/%Y"))
-        end_label = html.escape(oldest_date.strftime("%d/%m/%Y"))
+        start_label = html.escape(oldest_date.strftime("%d/%m/%Y"))
+        end_label = html.escape(newest_date.strftime("%d/%m/%Y"))
         st.markdown(
             f"""
             <style>
@@ -850,8 +846,8 @@ def render_calendar(profile: str) -> None:
             </style>
             <div class="timeline-scroll"><div class="timeline-content" style="width:{track_width}px">
               <div class="timeline-track"><div class="timeline-rail"></div>{''.join(ticks)}{''.join(markers)}</div>
-              <div class="timeline-endpoints"><span>Dernière date : {start_label}</span>
-                <span>Première date : {end_label}</span></div>
+              <div class="timeline-endpoints"><span>Première date : {start_label}</span>
+                <span>Dernière date : {end_label}</span></div>
             </div></div>
             """,
             unsafe_allow_html=True,
