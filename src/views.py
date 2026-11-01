@@ -229,9 +229,97 @@ def _show_photo_dialog(photo: dict[str, Any]) -> None:
             """,
             unsafe_allow_html=True,
         )
-        st.caption(f"{len(images)} photo(s) - pince sur une photo pour zoomer.")
-        for image_url in images:
-            st.image(image_url, use_container_width=True)
+        st.caption(f"{len(images)} photo(s) - pince sur une photo pour zoomer, puis glisse pour la déplacer.")
+        encoded_images = json.dumps(images).replace("<", "\\u003c")
+        gallery_html = r"""
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+          html, body { margin:0; padding:0; width:100%; background:transparent; }
+          body { overflow-y:auto; touch-action:pan-y; -webkit-overflow-scrolling:touch; }
+          .photo-gallery { display:flex; flex-direction:column; gap:14px; width:100%; padding:0 0 12px; }
+          .photo-frame { position:relative; width:100%; overflow:visible; }
+          .photo-frame img {
+            display:block; width:100%; height:auto; max-width:100%; margin:0 auto;
+            border-radius:8px; transform-origin:center center; will-change:transform;
+            touch-action:pan-y; -webkit-user-drag:none; user-select:none; -webkit-user-select:none;
+          }
+        </style>
+        <div class="photo-gallery" id="photo-gallery"></div>
+        <script>
+          const photoUrls = __IMAGES__;
+          const gallery = document.getElementById("photo-gallery");
+          const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+          const distance = (a, b) => Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+          photoUrls.forEach((url, index) => {
+            const frame = document.createElement("div");
+            frame.className = "photo-frame";
+            const image = document.createElement("img");
+            image.src = url;
+            image.alt = `Photo ${index + 1}`;
+            image.loading = "lazy";
+            frame.appendChild(image);
+            gallery.appendChild(frame);
+
+            let scale = 1, offsetX = 0, offsetY = 0, gesture = null, lastTap = 0;
+            const paint = () => { image.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(${scale})`; };
+            const limitPan = () => {
+              const maxX = image.clientWidth * (scale - 1) / 2;
+              const maxY = image.clientHeight * (scale - 1) / 2;
+              offsetX = clamp(offsetX, -maxX, maxX);
+              offsetY = clamp(offsetY, -maxY, maxY);
+            };
+            image.addEventListener("touchstart", event => {
+              if (event.touches.length === 2) {
+                gesture = { mode:"pinch", startDistance:distance(event.touches[0], event.touches[1]), startScale:scale };
+              } else if (event.touches.length === 1) {
+                gesture = { mode:"single", startX:event.touches[0].clientX, startY:event.touches[0].clientY,
+                  startOffsetX:offsetX, startOffsetY:offsetY, moved:false };
+              }
+            }, { passive:true });
+            image.addEventListener("touchmove", event => {
+              if (event.touches.length === 2 && gesture?.mode === "pinch") {
+                event.preventDefault();
+                scale = clamp(gesture.startScale * distance(event.touches[0], event.touches[1]) / gesture.startDistance, 1, 4);
+                if (scale === 1) offsetX = offsetY = 0;
+                limitPan(); paint();
+              } else if (event.touches.length === 1 && gesture?.mode === "single") {
+                const touch = event.touches[0];
+                const dx = touch.clientX - gesture.startX, dy = touch.clientY - gesture.startY;
+                if (Math.abs(dx) > 5 || Math.abs(dy) > 5) gesture.moved = true;
+                if (scale > 1) {
+                  event.preventDefault();
+                  offsetX = gesture.startOffsetX + dx; offsetY = gesture.startOffsetY + dy;
+                  limitPan(); paint();
+                }
+              }
+            }, { passive:false });
+            image.addEventListener("touchend", event => {
+              if (event.touches.length === 1) {
+                const touch = event.touches[0];
+                gesture = { mode:"single", startX:touch.clientX, startY:touch.clientY,
+                  startOffsetX:offsetX, startOffsetY:offsetY, moved:true };
+                return;
+              }
+              if (event.touches.length > 1) return;
+              if (gesture?.mode === "single" && !gesture.moved) {
+                const now = Date.now();
+                if (now - lastTap < 320) {
+                  scale = scale > 1 ? 1 : 2;
+                  if (scale === 1) offsetX = offsetY = 0;
+                  limitPan(); paint(); lastTap = 0;
+                } else lastTap = now;
+              }
+              gesture = null;
+            }, { passive:true });
+            image.addEventListener("dblclick", () => {
+              scale = scale > 1 ? 1 : 2;
+              if (scale === 1) offsetX = offsetY = 0;
+              limitPan(); paint();
+            });
+          });
+        </script>
+        """.replace("__IMAGES__", encoded_images)
+        st.components.v1.html(gallery_html, height=650, scrolling=True)
 
     render_contents()
 
@@ -409,19 +497,21 @@ def _render_journal_timeline(photos: list[dict[str, Any]]) -> None:
         )
         if event_day is not None:
             items.append((event_day, photo))
-    items.sort(key=lambda item: (item[0], str(item[1].get("title") or "").casefold()))
+    items.sort(key=lambda item: str(item[1].get("title") or "").casefold())
+    items.sort(key=lambda item: item[0], reverse=True)
     if not items:
         return
 
-    first_date, last_date = items[0][0], items[-1][0]
-    span = max(1, (last_date - first_date).days)
+    newest_date, oldest_date = items[0][0], items[-1][0]
+    span = max(1, (newest_date - oldest_date).days)
     months = []
-    cursor = date(first_date.year, first_date.month, 1)
-    last_month = date(last_date.year, last_date.month, 1)
+    cursor = date(oldest_date.year, oldest_date.month, 1)
+    last_month = date(newest_date.year, newest_date.month, 1)
     while cursor <= last_month:
         months.append(cursor)
         next_month = cursor.month + 1
         cursor = date(cursor.year + (next_month > 12), 1 if next_month > 12 else next_month, 1)
+    months.reverse()
 
     width = max(760, len(items) * 90 + 80, len(months) * 110 + 80)
     month_names = (
@@ -430,8 +520,8 @@ def _render_journal_timeline(photos: list[dict[str, Any]]) -> None:
     )
     ticks = []
     for index, month in enumerate(months):
-        fraction = 0.5 if first_date == last_date else min(
-            1, max(0, (month - first_date).days / span)
+        fraction = 0.5 if newest_date == oldest_date else min(
+            1, max(0, (newest_date - month).days / span)
         )
         left = (40 + fraction * (width - 80)) / width * 100
         edge = "timeline-first" if index == 0 else "timeline-last" if index == len(months) - 1 else ""
@@ -448,7 +538,7 @@ def _render_journal_timeline(photos: list[dict[str, Any]]) -> None:
     for index, (event_day, photo) in enumerate(items):
         seen = day_seen.get(event_day, 0)
         day_seen[event_day] = seen + 1
-        fraction = (event_day - first_date).days / span if span > 1 else 0.5
+        fraction = (newest_date - event_day).days / span if span > 1 else 0.5
         offset = (seen - (day_counts[event_day] - 1) / 2) * 12
         left = (40 + fraction * (width - 80) + offset) / width * 100
         title = html.escape(photo.get("title") or "Sans titre")
@@ -508,8 +598,8 @@ def _render_journal_timeline(photos: list[dict[str, Any]]) -> None:
         <div class="journal-timeline-scroll"><div class="journal-timeline-content">
           <div class="journal-timeline-track"><div class="journal-timeline-rail"></div>
             {''.join(ticks)}{''.join(markers)}</div>
-          <div class="journal-timeline-dates"><span>Première date : {first_date.strftime("%d/%m/%Y")}</span>
-            <span>Dernière date : {last_date.strftime("%d/%m/%Y")}</span></div>
+          <div class="journal-timeline-dates"><span>Dernière date : {newest_date.strftime("%d/%m/%Y")}</span>
+            <span>Première date : {oldest_date.strftime("%d/%m/%Y")}</span></div>
         </div></div>
         """,
         unsafe_allow_html=True,
@@ -651,19 +741,20 @@ def render_calendar(profile: str) -> None:
         )
         if event_day is not None:
             timeline_items.append((event_day, photo))
-    timeline_items.sort(key=lambda item: (item[0], str(item[1].get("title") or "").casefold()))
+    timeline_items.sort(key=lambda item: str(item[1].get("title") or "").casefold())
+    timeline_items.sort(key=lambda item: item[0], reverse=True)
 
     st.subheader("Frise chronologique")
     st.caption("🕵️ Chaque marqueur = un souvenir. Survolez-le pour son titre, sa catégorie, son lieu et sa date; la frise fait le guide touristique !")
     if not timeline_items:
         st.caption("La frise apparaîtra dès qu’un souvenir aura une date.")
     else:
-        first_date = timeline_items[0][0]
-        last_date = timeline_items[-1][0]
-        date_span = max(1, (last_date - first_date).days)
+        newest_date = timeline_items[0][0]
+        oldest_date = timeline_items[-1][0]
+        date_span = max(1, (newest_date - oldest_date).days)
         month_ticks: list[date] = []
-        month_cursor = date(first_date.year, first_date.month, 1)
-        final_month = date(last_date.year, last_date.month, 1)
+        month_cursor = date(oldest_date.year, oldest_date.month, 1)
+        final_month = date(newest_date.year, newest_date.month, 1)
         while month_cursor <= final_month:
             month_ticks.append(month_cursor)
             next_month = month_cursor.month + 1
@@ -672,6 +763,7 @@ def render_calendar(profile: str) -> None:
                 1 if next_month > 12 else next_month,
                 1,
             )
+        month_ticks.reverse()
         track_width = max(760, len(timeline_items) * 90 + 80, len(month_ticks) * 110 + 80)
         same_day_counts: dict[date, int] = {}
         for event_day, _ in timeline_items:
@@ -679,7 +771,7 @@ def render_calendar(profile: str) -> None:
         same_day_seen: dict[date, int] = {}
         markers = []
         for item_index, (event_day, photo) in enumerate(timeline_items):
-            fraction = (event_day - first_date).days / date_span if date_span > 1 else 0.5
+            fraction = (newest_date - event_day).days / date_span if date_span > 1 else 0.5
             same_day_index = same_day_seen.get(event_day, 0)
             same_day_seen[event_day] = same_day_index + 1
             same_day_offset = (same_day_index - (same_day_counts[event_day] - 1) / 2) * 12
@@ -711,8 +803,8 @@ def render_calendar(profile: str) -> None:
         )
         for index, tick_date in enumerate(month_ticks):
             fraction = (
-                0.5 if first_date == last_date else
-                min(1, max(0, (tick_date - first_date).days / date_span))
+                0.5 if newest_date == oldest_date else
+                min(1, max(0, (newest_date - tick_date).days / date_span))
             )
             left_percent = (40 + fraction * (track_width - 80)) / track_width * 100
             edge = "timeline-tick-first" if index == 0 else (
@@ -723,8 +815,8 @@ def render_calendar(profile: str) -> None:
                 f'<div class="timeline-tick {edge}" style="left:{left_percent:.3f}%">'
                 f'<span>{label}</span></div>'
             )
-        start_label = html.escape(first_date.strftime("%d/%m/%Y"))
-        end_label = html.escape(last_date.strftime("%d/%m/%Y"))
+        start_label = html.escape(newest_date.strftime("%d/%m/%Y"))
+        end_label = html.escape(oldest_date.strftime("%d/%m/%Y"))
         st.markdown(
             f"""
             <style>
@@ -758,8 +850,8 @@ def render_calendar(profile: str) -> None:
             </style>
             <div class="timeline-scroll"><div class="timeline-content" style="width:{track_width}px">
               <div class="timeline-track"><div class="timeline-rail"></div>{''.join(ticks)}{''.join(markers)}</div>
-              <div class="timeline-endpoints"><span>Première date : {start_label}</span>
-                <span>Dernière date : {end_label}</span></div>
+              <div class="timeline-endpoints"><span>Dernière date : {start_label}</span>
+                <span>Première date : {end_label}</span></div>
             </div></div>
             """,
             unsafe_allow_html=True,
