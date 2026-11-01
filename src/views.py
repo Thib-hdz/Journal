@@ -565,8 +565,8 @@ def _render_journal_timeline(photos: list[dict[str, Any]]) -> None:
     st.markdown(
         f"""
         <style>
-          .journal-timeline-scroll {{ overflow-x:auto; overflow-y:hidden; padding:1rem 0; }}
-          .journal-timeline-content {{ position:relative; width:{width}px; height:280px; }}
+          .journal-timeline-scroll {{ overflow-x:auto; overflow-y:hidden; padding:1rem 0; direction:rtl; }}
+          .journal-timeline-content {{ position:relative; width:{width}px; height:280px; direction:ltr; }}
           .journal-timeline-track {{ position:relative; height:240px; }}
           .journal-timeline-rail {{ position:absolute; left:40px; right:40px; top:112px; height:4px;
             border-radius:4px; background:#d1d5db; }}
@@ -816,8 +816,8 @@ def render_calendar(profile: str) -> None:
         st.markdown(
             f"""
             <style>
-              .timeline-scroll {{ overflow-x:auto; overflow-y:hidden; padding:1rem 0; }}
-              .timeline-content {{ position:relative; height:280px; }}
+              .timeline-scroll {{ overflow-x:auto; overflow-y:hidden; padding:1rem 0; direction:rtl; }}
+              .timeline-content {{ position:relative; height:280px; direction:ltr; }}
               .timeline-track {{ position:relative; height:240px; }}
               .timeline-rail {{ position:absolute; left:40px; right:40px; top:112px; height:4px;
                 border-radius:4px; background:#d1d5db; }}
