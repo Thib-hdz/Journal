@@ -553,14 +553,15 @@ def _render_journal_timeline(photos: list[dict[str, Any]]) -> None:
             f'href="#photo-{memory_id}" style="left:{left:.3f}%;--marker-color:{marker_color}" '
             f'aria-label="Voir {title}, {event_day.strftime("%d/%m/%Y")}">'
             '<span class="journal-timeline-dot"></span>'
+            f'<span class="journal-timeline-title">{title}</span>'
             f'<span class="journal-timeline-tooltip"><strong>{title}</strong>'
             f'<br>{category} · {location}<br>{event_day.strftime("%d/%m/%Y")}</span></a>'
         )
 
     st.subheader("Frise chronologique")
     st.caption(
-        "🕰️ Survolez un repère pour les détails, cliquez pour atterrir pile sur le souvenir "
-        "(téléportation, sans remonter toute la page !), puis faites défiler pour voyager dans le temps."
+        "🕰️ Les titres restent visibles. Faites défiler horizontalement la frise "
+        "(glissez sur téléphone), survolez un repère pour les détails ou cliquez pour rejoindre le souvenir."
     )
     st.markdown(
         f"""
@@ -574,6 +575,14 @@ def _render_journal_timeline(photos: list[dict[str, Any]]) -> None:
           .journal-timeline-dot {{ position:absolute; left:-8px; top:-7px; width:16px; height:16px;
             border:3px solid white; border-radius:50%; background:var(--marker-color,#ef4444);
             box-shadow:0 0 0 2px var(--marker-color,#ef4444); cursor:pointer; }}
+          .journal-timeline-title {{ position:absolute; left:0; width:120px; padding:2px 4px;
+            border-radius:4px; color:#263042; background:rgba(255,255,255,.92); font-size:.68rem;
+            line-height:1.15; text-align:center; white-space:nowrap; overflow:hidden;
+            text-overflow:ellipsis; transform:translateX(-50%); pointer-events:none; }}
+          .journal-timeline-marker.upper .journal-timeline-title {{ bottom:15px; }}
+          .journal-timeline-marker.lower .journal-timeline-title {{ top:15px; }}
+          .journal-timeline-marker.first .journal-timeline-title {{ left:0; transform:none; text-align:left; }}
+          .journal-timeline-marker.last .journal-timeline-title {{ left:auto; right:0; transform:none; text-align:right; }}
           .journal-timeline-tooltip {{ position:absolute; left:0; display:none; width:190px; padding:.55rem;
             border-radius:8px; color:white; background:#1f2937; font-size:.78rem; line-height:1.4;
             overflow-wrap:anywhere; text-decoration:none; box-shadow:0 4px 12px #0003; transform:translateX(-50%); }}
@@ -604,134 +613,7 @@ def _render_journal_timeline(photos: list[dict[str, Any]]) -> None:
     )
 
 
-def render_calendar(profile: str) -> None:
-    """Affiche les souvenirs d'un journal dans un calendrier mensuel."""
-    st.title(f"📅 Calendrier de {PROFILES[profile]}")
-
-    try:
-        photos = get_photos(profile)
-    except RuntimeError as error:
-        st.error(str(error))
-        return
-
-    month_key = f"calendar_month_{profile}"
-    st.session_state.setdefault(month_key, date.today().replace(day=1))
-    displayed_month = st.session_state[month_key]
-    previous, month_label, following = st.columns([1, 5, 1])
-    with previous:
-        if st.button("←", key=f"calendar_previous_{profile}", help="Mois précédent"):
-            year, month = displayed_month.year, displayed_month.month - 1
-            if month == 0:
-                year, month = year - 1, 12
-            st.session_state[month_key] = date(year, month, 1)
-            st.rerun()
-    with month_label:
-        month_names = (
-            "janvier", "février", "mars", "avril", "mai", "juin",
-            "juillet", "août", "septembre", "octobre", "novembre", "décembre",
-        )
-        st.subheader(f"{month_names[displayed_month.month - 1].capitalize()} {displayed_month.year}")
-    with following:
-        if st.button("→", key=f"calendar_next_{profile}", help="Mois suivant"):
-            year, month = displayed_month.year, displayed_month.month + 1
-            if month == 13:
-                year, month = year + 1, 1
-            st.session_state[month_key] = date(year, month, 1)
-            st.rerun()
-
-    memories_by_day: dict[date, list[dict[str, Any]]] = {}
-    for photo in photos:
-        event_day = _photo_calendar_date(
-            photo.get("date_end") or photo.get("date_start") or photo.get("created_at")
-        )
-        if event_day is None or event_day.month != displayed_month.month or event_day.year != displayed_month.year:
-            continue
-        memories_by_day.setdefault(event_day, []).append(photo)
-
-    weekday_headers = "".join(
-        f'<div class="calendar-weekday">{name}</div>'
-        for name in ("Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim")
-    )
-    first_weekday, days_in_month = calendar_module.monthrange(
-        displayed_month.year, displayed_month.month
-    )
-    cells: list[str] = []
-    for day_number in range(1, days_in_month + 1):
-        current_day = date(displayed_month.year, displayed_month.month, day_number)
-        day_memories = memories_by_day.get(current_day, [])
-        memory = day_memories[0] if day_memories else None
-        image = _photo_preview(memory) if memory else ""
-        safe_image = html.escape(image, quote=True)
-        cell_styles = []
-        if day_number == 1:
-            cell_styles.append(f"grid-column-start:{first_weekday + 1}")
-        if image:
-            cell_styles.append(f"--memory-image: url('{safe_image}')")
-        cell_style = f' style="{";".join(cell_styles)}"' if cell_styles else ""
-        today_class = " calendar-day-today" if current_day == date.today() else ""
-        if memory:
-            title = html.escape(memory.get("title") or "Sans titre")
-            category = html.escape(memory.get("category") or "Non classé")
-            location = html.escape(memory.get("location") or "Lieu non précisé")
-            extra = f'<span class="calendar-extra">{category}<br>{location}</span>'
-            count = (
-                f'<span class="calendar-count">+{len(day_memories) - 1}</span>'
-                if len(day_memories) > 1 else ""
-            )
-            details = f'<span class="calendar-title">{title}</span>{extra}{count}'
-            image_class = "" if image else " calendar-day-memory-no-image"
-            cells.append(
-                f'<div class="calendar-day calendar-day-memory{image_class}{today_class}"{cell_style}>'
-                f'<span class="calendar-number">{day_number}</span>'
-                f'<div class="calendar-details">{details}</div></div>'
-            )
-        else:
-            cells.append(
-                f'<div class="calendar-day calendar-day-no-memory{today_class}"{cell_style}>'
-                f'<span class="calendar-number">{day_number}</span></div>'
-            )
-
-    st.markdown(
-        """
-        <style>
-          .memory-calendar { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:.4rem; }
-          .calendar-weekday { text-align:center; font-weight:700; padding:.45rem 0; color:#374151; }
-          .calendar-day { position:relative; min-width:0; aspect-ratio:1.12; overflow:hidden;
-            border-radius:10px; background:#e5e7eb; }
-          .calendar-day-empty { background:#f4f3f7; }
-          .calendar-day-no-memory { background:#e9e8f1; border:1px solid #d8d7e3; }
-          .calendar-day-memory { color:white; background-image:linear-gradient(180deg,rgba(0,0,0,.2),rgba(0,0,0,.08) 40%,rgba(0,0,0,.78)),var(--memory-image);
-            background-size:cover; background-position:center; }
-          .calendar-day-memory-no-image { background:#7b8798; }
-          .calendar-number { position:absolute; z-index:1; top:.35rem; left:.45rem; font-weight:700;
-            text-shadow:0 1px 4px #000; }
-          .calendar-details { position:absolute; inset:auto 0 0; display:flex; flex-direction:column; gap:.15rem;
-            padding:.45rem; font-size:.78rem; line-height:1.2; overflow-wrap:anywhere; }
-          .calendar-title { font-weight:700; }
-          .calendar-extra { max-height:0; opacity:0; overflow:hidden; transition:max-height .2s,opacity .2s; }
-          .calendar-day-memory:hover .calendar-extra,
-          .calendar-day-memory:focus-within .calendar-extra { max-height:4rem; opacity:1; }
-          .calendar-count { position:absolute; right:.4rem; top:.35rem; padding:.15rem .35rem;
-            border-radius:1rem; background:rgba(0,0,0,.65); font-size:.7rem; }
-          .calendar-day-today { outline:3px solid #ef4444; outline-offset:-3px; }
-          @media (max-width:700px) {
-            .memory-calendar { gap:.2rem; }
-            .calendar-day { aspect-ratio:.78; border-radius:6px; }
-            .calendar-weekday { font-size:.72rem; }
-            .calendar-number { top:.2rem; left:.25rem; font-size:.78rem; }
-            .calendar-details { padding:.25rem; font-size:.62rem; }
-            .calendar-day-memory .calendar-extra { max-height:4rem; opacity:1; }
-            .calendar-count { right:.2rem; top:.2rem; font-size:.62rem; }
-          }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        f'<div class="memory-calendar">{weekday_headers}{"".join(cells)}</div>',
-        unsafe_allow_html=True,
-    )
-
+def _render_calendar_timeline(photos: list[dict[str, Any]]) -> None:
     timeline_items = []
     for photo in photos:
         event_day = _photo_calendar_date(
@@ -852,6 +734,139 @@ def render_calendar(profile: str) -> None:
             """,
             unsafe_allow_html=True,
         )
+
+
+
+def render_calendar(profile: str) -> None:
+    """Affiche les souvenirs d'un journal dans un calendrier mensuel."""
+    st.title(f"📅 Calendrier de {PROFILES[profile]}")
+
+    try:
+        photos = get_photos(profile)
+    except RuntimeError as error:
+        st.error(str(error))
+        return
+
+    _render_calendar_timeline(photos)
+
+    month_key = f"calendar_month_{profile}"
+    st.session_state.setdefault(month_key, date.today().replace(day=1))
+    displayed_month = st.session_state[month_key]
+    previous, month_label, following = st.columns([1, 5, 1])
+    with previous:
+        if st.button("←", key=f"calendar_previous_{profile}", help="Mois précédent"):
+            year, month = displayed_month.year, displayed_month.month - 1
+            if month == 0:
+                year, month = year - 1, 12
+            st.session_state[month_key] = date(year, month, 1)
+            st.rerun()
+    with month_label:
+        month_names = (
+            "janvier", "février", "mars", "avril", "mai", "juin",
+            "juillet", "août", "septembre", "octobre", "novembre", "décembre",
+        )
+        st.subheader(f"{month_names[displayed_month.month - 1].capitalize()} {displayed_month.year}")
+    with following:
+        if st.button("→", key=f"calendar_next_{profile}", help="Mois suivant"):
+            year, month = displayed_month.year, displayed_month.month + 1
+            if month == 13:
+                year, month = year + 1, 1
+            st.session_state[month_key] = date(year, month, 1)
+            st.rerun()
+
+    memories_by_day: dict[date, list[dict[str, Any]]] = {}
+    for photo in photos:
+        event_day = _photo_calendar_date(
+            photo.get("date_end") or photo.get("date_start") or photo.get("created_at")
+        )
+        if event_day is None or event_day.month != displayed_month.month or event_day.year != displayed_month.year:
+            continue
+        memories_by_day.setdefault(event_day, []).append(photo)
+
+    weekday_headers = "".join(
+        f'<div class="calendar-weekday">{name}</div>'
+        for name in ("Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim")
+    )
+    first_weekday, days_in_month = calendar_module.monthrange(
+        displayed_month.year, displayed_month.month
+    )
+    cells: list[str] = []
+    for day_number in range(1, days_in_month + 1):
+        current_day = date(displayed_month.year, displayed_month.month, day_number)
+        day_memories = memories_by_day.get(current_day, [])
+        memory = day_memories[0] if day_memories else None
+        image = _photo_preview(memory) if memory else ""
+        safe_image = html.escape(image, quote=True)
+        cell_styles = []
+        if day_number == 1:
+            cell_styles.append(f"grid-column-start:{first_weekday + 1}")
+        if image:
+            cell_styles.append(f"--memory-image: url('{safe_image}')")
+        cell_style = f' style="{";".join(cell_styles)}"' if cell_styles else ""
+        today_class = " calendar-day-today" if current_day == date.today() else ""
+        if memory:
+            title = html.escape(memory.get("title") or "Sans titre")
+            category = html.escape(memory.get("category") or "Non classé")
+            location = html.escape(memory.get("location") or "Lieu non précisé")
+            extra = f'<span class="calendar-extra">{category}<br>{location}</span>'
+            count = (
+                f'<span class="calendar-count">+{len(day_memories) - 1}</span>'
+                if len(day_memories) > 1 else ""
+            )
+            details = f'<span class="calendar-title">{title}</span>{extra}{count}'
+            image_class = "" if image else " calendar-day-memory-no-image"
+            cells.append(
+                f'<div class="calendar-day calendar-day-memory{image_class}{today_class}"{cell_style}>'
+                f'<span class="calendar-number">{day_number}</span>'
+                f'<div class="calendar-details">{details}</div></div>'
+            )
+        else:
+            cells.append(
+                f'<div class="calendar-day calendar-day-no-memory{today_class}"{cell_style}>'
+                f'<span class="calendar-number">{day_number}</span></div>'
+            )
+
+    st.markdown(
+        """
+        <style>
+          .memory-calendar { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:.4rem; }
+          .calendar-weekday { text-align:center; font-weight:700; padding:.45rem 0; color:#374151; }
+          .calendar-day { position:relative; min-width:0; aspect-ratio:1.12; overflow:hidden;
+            border-radius:10px; background:#e5e7eb; }
+          .calendar-day-empty { background:#f4f3f7; }
+          .calendar-day-no-memory { background:#e9e8f1; border:1px solid #d8d7e3; }
+          .calendar-day-memory { color:white; background-image:linear-gradient(180deg,rgba(0,0,0,.2),rgba(0,0,0,.08) 40%,rgba(0,0,0,.78)),var(--memory-image);
+            background-size:cover; background-position:center; }
+          .calendar-day-memory-no-image { background:#7b8798; }
+          .calendar-number { position:absolute; z-index:1; top:.35rem; left:.45rem; font-weight:700;
+            text-shadow:0 1px 4px #000; }
+          .calendar-details { position:absolute; inset:auto 0 0; display:flex; flex-direction:column; gap:.15rem;
+            padding:.45rem; font-size:.78rem; line-height:1.2; overflow-wrap:anywhere; }
+          .calendar-title { font-weight:700; }
+          .calendar-extra { max-height:0; opacity:0; overflow:hidden; transition:max-height .2s,opacity .2s; }
+          .calendar-day-memory:hover .calendar-extra,
+          .calendar-day-memory:focus-within .calendar-extra { max-height:4rem; opacity:1; }
+          .calendar-count { position:absolute; right:.4rem; top:.35rem; padding:.15rem .35rem;
+            border-radius:1rem; background:rgba(0,0,0,.65); font-size:.7rem; }
+          .calendar-day-today { outline:3px solid #ef4444; outline-offset:-3px; }
+          @media (max-width:700px) {
+            .memory-calendar { gap:.2rem; }
+            .calendar-day { aspect-ratio:.78; border-radius:6px; }
+            .calendar-weekday { font-size:.72rem; }
+            .calendar-number { top:.2rem; left:.25rem; font-size:.78rem; }
+            .calendar-details { padding:.25rem; font-size:.62rem; }
+            .calendar-day-memory .calendar-extra { max-height:4rem; opacity:1; }
+            .calendar-count { right:.2rem; top:.2rem; font-size:.62rem; }
+          }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f'<div class="memory-calendar">{weekday_headers}{"".join(cells)}</div>',
+        unsafe_allow_html=True,
+    )
+
 
 
 def render_map() -> None:
