@@ -624,7 +624,7 @@ def _render_calendar_timeline(photos: list[dict[str, Any]]) -> None:
     timeline_items.sort(key=lambda item: (item[0], str(item[1].get("title") or "").casefold()))
 
     st.subheader("Frise chronologique")
-    st.caption("🕵️ Chaque marqueur = un souvenir. Survolez-le pour son titre, sa catégorie, son lieu et sa date; la frise fait le guide touristique !")
+    st.caption("\U0001F575\ufe0f Les titres restent visibles. Survolez un marqueur pour sa cat\u00e9gorie, son lieu et sa date; la frise fait le guide touristique !")
     if not timeline_items:
         st.caption("La frise apparaîtra dès qu’un souvenir aura une date.")
     else:
@@ -671,6 +671,7 @@ def _render_calendar_timeline(photos: list[dict[str, Any]]) -> None:
                 f'<div class="timeline-marker {lane} {edge}" '
                 f'style="left:{left_percent:.3f}%;--marker-color:{marker_color}">'
                 '<span class="timeline-dot"></span>'
+                f'<span class="timeline-title">{title}</span>'
                 f'<span class="timeline-tooltip"><strong>{title}</strong>'
                 f'<br>{category} · {location}<br>{marker_date}</span></div>'
             )
@@ -707,6 +708,14 @@ def _render_calendar_timeline(photos: list[dict[str, Any]]) -> None:
               .timeline-dot {{ position:absolute; left:-8px; top:-7px; width:16px; height:16px;
                 border:3px solid white; border-radius:50%; background:var(--marker-color,#ef4444);
                 box-shadow:0 0 0 2px var(--marker-color,#ef4444); cursor:pointer; }}
+              .timeline-title {{ position:absolute; left:0; width:120px; padding:2px 4px;
+                border-radius:4px; color:#263042; background:rgba(255,255,255,.92); font-size:.68rem;
+                line-height:1.15; text-align:center; white-space:nowrap; overflow:hidden;
+                text-overflow:ellipsis; transform:translateX(-50%); pointer-events:none; }}
+              .timeline-marker-upper .timeline-title {{ bottom:15px; }}
+              .timeline-marker-lower .timeline-title {{ top:15px; }}
+              .timeline-marker-first .timeline-title {{ left:0; transform:none; text-align:left; }}
+              .timeline-marker-last .timeline-title {{ left:auto; right:0; transform:none; text-align:right; }}
               .timeline-tooltip {{ position:absolute; left:0; display:none; width:190px; padding:.5rem;
                 border-radius:8px; color:white; background:#1f2937; font-size:.78rem; line-height:1.35;
                 overflow-wrap:anywhere; box-shadow:0 4px 12px #0003; transform:translateX(-50%); }}
@@ -737,6 +746,14 @@ def _render_calendar_timeline(photos: list[dict[str, Any]]) -> None:
 
 
 
+def _shift_calendar_month(month_key: str, delta: int) -> None:
+    """Décale le mois affiché d’un mois dans un sens ou dans l’autre."""
+    current_month = st.session_state[month_key]
+    absolute_month = current_month.year * 12 + current_month.month - 1 + delta
+    year, month_index = divmod(absolute_month, 12)
+    st.session_state[month_key] = date(year, month_index + 1, 1)
+
+
 def render_calendar(profile: str) -> None:
     """Affiche les souvenirs d'un journal dans un calendrier mensuel."""
     st.title(f"📅 Calendrier de {PROFILES[profile]}")
@@ -752,27 +769,28 @@ def render_calendar(profile: str) -> None:
     month_key = f"calendar_month_{profile}"
     st.session_state.setdefault(month_key, date.today().replace(day=1))
     displayed_month = st.session_state[month_key]
-    previous, month_label, following = st.columns([1, 5, 1])
-    with previous:
-        if st.button("←", key=f"calendar_previous_{profile}", help="Mois précédent"):
-            year, month = displayed_month.year, displayed_month.month - 1
-            if month == 0:
-                year, month = year - 1, 12
-            st.session_state[month_key] = date(year, month, 1)
-            st.rerun()
-    with month_label:
-        month_names = (
-            "janvier", "février", "mars", "avril", "mai", "juin",
-            "juillet", "août", "septembre", "octobre", "novembre", "décembre",
+    month_names = (
+        "janvier", "février", "mars", "avril", "mai", "juin",
+        "juillet", "août", "septembre", "octobre", "novembre", "décembre",
+    )
+    with st.container(horizontal=True, vertical_alignment="center", gap="small"):
+        st.button(
+            "←",
+            key=f"calendar_previous_{profile}",
+            help="Mois précédent",
+            on_click=_shift_calendar_month,
+            args=(month_key, -1),
         )
-        st.subheader(f"{month_names[displayed_month.month - 1].capitalize()} {displayed_month.year}")
-    with following:
-        if st.button("→", key=f"calendar_next_{profile}", help="Mois suivant"):
-            year, month = displayed_month.year, displayed_month.month + 1
-            if month == 13:
-                year, month = year + 1, 1
-            st.session_state[month_key] = date(year, month, 1)
-            st.rerun()
+        st.button(
+            "→",
+            key=f"calendar_next_{profile}",
+            help="Mois suivant",
+            on_click=_shift_calendar_month,
+            args=(month_key, 1),
+        )
+        st.markdown(
+            f"### {month_names[displayed_month.month - 1].capitalize()} {displayed_month.year}"
+        )
 
     memories_by_day: dict[date, list[dict[str, Any]]] = {}
     for photo in photos:
@@ -806,14 +824,11 @@ def render_calendar(profile: str) -> None:
         today_class = " calendar-day-today" if current_day == date.today() else ""
         if memory:
             title = html.escape(memory.get("title") or "Sans titre")
-            category = html.escape(memory.get("category") or "Non classé")
-            location = html.escape(memory.get("location") or "Lieu non précisé")
-            extra = f'<span class="calendar-extra">{category}<br>{location}</span>'
             count = (
                 f'<span class="calendar-count">+{len(day_memories) - 1}</span>'
                 if len(day_memories) > 1 else ""
             )
-            details = f'<span class="calendar-title">{title}</span>{extra}{count}'
+            details = f'<span class="calendar-title">{title}</span>{count}'
             image_class = "" if image else " calendar-day-memory-no-image"
             cells.append(
                 f'<div class="calendar-day calendar-day-memory{image_class}{today_class}"{cell_style}>'
@@ -834,7 +849,8 @@ def render_calendar(profile: str) -> None:
           .calendar-day { position:relative; min-width:0; aspect-ratio:1.12; overflow:hidden;
             border-radius:10px; background:#e5e7eb; }
           .calendar-day-empty { background:#f4f3f7; }
-          .calendar-day-no-memory { background:#e9e8f1; border:1px solid #d8d7e3; }
+          .calendar-day-no-memory { background:#e9e8f1; border:1px solid #d8d7e3;
+            transform:scale(.86); opacity:.72; }
           .calendar-day-memory { color:white; background-image:linear-gradient(180deg,rgba(0,0,0,.2),rgba(0,0,0,.08) 40%,rgba(0,0,0,.78)),var(--memory-image);
             background-size:cover; background-position:center; }
           .calendar-day-memory-no-image { background:#7b8798; }
@@ -843,9 +859,6 @@ def render_calendar(profile: str) -> None:
           .calendar-details { position:absolute; inset:auto 0 0; display:flex; flex-direction:column; gap:.15rem;
             padding:.45rem; font-size:.78rem; line-height:1.2; overflow-wrap:anywhere; }
           .calendar-title { font-weight:700; }
-          .calendar-extra { max-height:0; opacity:0; overflow:hidden; transition:max-height .2s,opacity .2s; }
-          .calendar-day-memory:hover .calendar-extra,
-          .calendar-day-memory:focus-within .calendar-extra { max-height:4rem; opacity:1; }
           .calendar-count { position:absolute; right:.4rem; top:.35rem; padding:.15rem .35rem;
             border-radius:1rem; background:rgba(0,0,0,.65); font-size:.7rem; }
           .calendar-day-today { outline:3px solid #ef4444; outline-offset:-3px; }
@@ -855,7 +868,6 @@ def render_calendar(profile: str) -> None:
             .calendar-weekday { font-size:.72rem; }
             .calendar-number { top:.2rem; left:.25rem; font-size:.78rem; }
             .calendar-details { padding:.25rem; font-size:.62rem; }
-            .calendar-day-memory .calendar-extra { max-height:4rem; opacity:1; }
             .calendar-count { right:.2rem; top:.2rem; font-size:.62rem; }
           }
         </style>
